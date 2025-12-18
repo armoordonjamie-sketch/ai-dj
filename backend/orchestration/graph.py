@@ -946,7 +946,7 @@ async def InitialAudioRendererTool(state: DJState) -> DJState:
             
             # Trim song to end ~20 seconds before the end
             # The next segment (mix) starts exactly at (duration - 20)
-            transition_buffer = 20.0  # Match song1_lead_in in dj_mix.py
+            transition_buffer = 20.0  # Reserve room for the upcoming transition buffer
             song_trim_duration = song_duration - transition_buffer
             if song_trim_duration < 60:  # Minimum 60 seconds of song
                 song_trim_duration = song_duration - 15  # Leave at least 15s for transition
@@ -1069,7 +1069,7 @@ async def AudioRendererTool(state: DJState) -> DJState:
         
         if has_song_a:
             # Full transition between two songs
-            result_path = create_dj_mix(
+            result = create_dj_mix(
                 song1_path=song_a_path,
                 song2_path=song_b_path,
                 transition_type=transition_type,
@@ -1079,6 +1079,12 @@ async def AudioRendererTool(state: DJState) -> DJState:
                 tts_offset=tts_offset,
                 tts_path=tts_path
             )
+            result_path = result.get("output_path") if isinstance(result, dict) else result
+            if isinstance(result, dict):
+                if result.get("metadata"):
+                    state = {**state, "render_metadata": result["metadata"]}
+                if result.get("metadata_path"):
+                    state = {**state, "render_metadata_path": result["metadata_path"]}
         else:
             # First song - just play song B (no transition needed)
             logging.info("No song A - copying song B as output")
