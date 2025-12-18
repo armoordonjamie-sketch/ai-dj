@@ -121,7 +121,8 @@ class OpenRouterClient:
     async def generate_track_selection(
         self,
         user_controls: Dict[str, Any],
-        history: List[Dict[str, Any]],
+        session_history: List[Dict[str, Any]],
+        global_history: List[Dict[str, Any]],
         available_songs: List[Dict[str, Any]],
         thinking_budget: int = 2000
     ) -> Optional[Dict[str, Any]]:
@@ -130,7 +131,8 @@ class OpenRouterClient:
         
         Args:
             user_controls: User preferences (mood, genre, prompt)
-            history: Recent play history
+            session_history: Recent play history for current session
+            global_history: Recent play history across all sessions
             available_songs: Candidate songs with metadata
             thinking_budget: Reasoning token budget
         
@@ -145,6 +147,7 @@ SELECTION CRITERIA (in priority order):
 3. User personalization: respect mood slider, genre preferences, freeform prompts
 4. Transition variety: avoid repetitive transition types (if last 3 were blends, consider a cut/echo-out)
 5. Emotional arc: build tension/release over 3-4 tracks, manage energy intentionally
+6. Recency guardrails: avoid songs appearing in recent session/global history unless no fresh option remains.
 
 Use Soundcharts audio features:
 - tempo: BPM for beatmatching and transition selection
@@ -166,18 +169,24 @@ User Controls:
 - Genres: {user_controls.get('genres', [])}
 - Prompt: {user_controls.get('prompt', 'None')}
 
-Recent History (last 5 tracks):
-{json.dumps(history[:5], indent=2)}
+Current Session History (last 5 tracks):
+{json.dumps(session_history[:5], indent=2)}
+
+Global Recent History (last 10 tracks, avoid repeats):
+{json.dumps(global_history[:10], indent=2)}
 
 Available Songs:
 {json.dumps(available_songs[:20], indent=2)}
+
+Preference: prioritize songs not appearing in either history; only reuse recent tracks if they are the sole musically coherent option.
 
 Select the best next track. Respond with JSON:
 {{
   "selected_uuid": "song-uuid-here",
   "rationale": "Why this track fits",
   "energy_match": 0.8,
-  "genre_match": true
+  "genre_match": true,
+  "recency_ok": true
 }}
 """
         

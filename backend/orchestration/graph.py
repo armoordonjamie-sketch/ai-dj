@@ -202,7 +202,8 @@ async def InitialSongSelectorAgent(state: DJState) -> DJState:
         
         llm_response = await openrouter.generate_track_selection(
             user_controls=user_controls,
-            history=history,
+            session_history=history,
+            global_history=history,
             available_songs=search_results,
             thinking_budget=2000
         )
@@ -406,9 +407,9 @@ async def TrackSelectorAgent(state: DJState) -> DJState:
         
         # Get recent play history
         session_id = state.get("session_id", "")
-        session_id = state.get("session_id", "")
+        session_history = await db.get_recent_plays(session_id, limit=20)
         # Use global history to avoid repeating songs across sessions
-        history = await db.get_global_recent_plays(limit=50)
+        global_history = await db.get_global_recent_plays(limit=100)
         
         # Load user context for personalized search
         user_context = load_user_context()
@@ -421,22 +422,35 @@ async def TrackSelectorAgent(state: DJState) -> DJState:
             return {**state, "selected_song_uuid": None}
         
         # Let AI generate search query based on preferences and history
-        search_query = await get_ai_search_query(user_context, history)
+        search_query = await get_ai_search_query(user_context, global_history)
         logging.info(f"AI generated search query: {search_query}")
-        
+
         # Search for songs based on AI-selected query
         search_results = await soundcharts.search_song(search_query, limit=10)
-        
+
         if not search_results:
             logging.warning(f"No songs found for '{search_query}', trying another AI query")
-            fallback_query = await get_ai_search_query(user_context, history)
+            fallback_query = await get_ai_search_query(user_context, global_history)
             search_results = await soundcharts.search_song(fallback_query, limit=10)
-        
+
         if not search_results:
             logging.warning("No songs found from Soundcharts")
             logging.info("This may indicate API access issues - check credentials")
             return {**state, "selected_song_uuid": None}
-        
+
+        # Exclude recently played tracks before presenting to LLM
+        recent_uuids = {entry.get('song_uuid') for entry in (session_history + global_history) if entry.get('song_uuid')}
+        filtered_results = [song for song in search_results if song.get('uuid') not in recent_uuids]
+
+        excluded_uuids = [song.get('uuid') for song in search_results if song.get('uuid') in recent_uuids]
+        if excluded_uuids:
+            logging.info(f"Excluding recently played tracks from candidates: {excluded_uuids}")
+
+        # If filtering removed all candidates, fall back to original list
+        if not filtered_results:
+            filtered_results = search_results
+            logging.info("All candidates were recently played; falling back to unfiltered results")
+
         # Use LLM to select track - pass user context
         user_controls = {
             "mood": user_context.get("mood", 0.7),
@@ -444,11 +458,12 @@ async def TrackSelectorAgent(state: DJState) -> DJState:
             "prompt": None,
             "user_preferences": user_context.get("music_preferences", [])
         }
-        
+
         llm_response = await openrouter.generate_track_selection(
             user_controls=user_controls,
-            history=history,
-            available_songs=search_results,
+            session_history=session_history,
+            global_history=global_history,
+            available_songs=filtered_results,
             thinking_budget=2000
         )
         
@@ -511,7 +526,7 @@ async def PlanningAgent(state: DJState) -> DJState:
         session_history = await db.get_recent_plays(session_id, limit=5)
         
         # For avoiding repeats, we need GLOBAL history
-        global_history = await db.get_global_recent_plays(limit=50)
+        global_history = await db.get_global_recent_plays(limit=100)
         
         song_a_uuid = None
         if session_history and len(session_history) > 0:
@@ -563,7 +578,8 @@ async def PlanningAgent(state: DJState) -> DJState:
         
         llm_response = await openrouter.generate_track_selection(
             user_controls=user_controls,
-            history=session_history,
+            session_history=session_history,
+            global_history=global_history,
             available_songs=search_results,
             thinking_budget=2000
         )
