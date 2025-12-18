@@ -26,6 +26,8 @@ class DJLoop:
         self.segment_queue = None
         # Flag to prioritize rendering when frontend requests more
         self._urgent_segment_needed = False
+        # Prevent overlapping planning/render cycles
+        self._rendering_in_progress = False
     
     def request_more_segments(self):
         """Signal that frontend needs more segments urgently."""
@@ -129,19 +131,23 @@ class DJLoop:
                 # OR if the frontend urgently needs segments
                 is_urgent = self._urgent_segment_needed
                 can_plan = (current_time - last_planning_time) >= planning_cooldown or is_urgent
-                
+
                 # Check queue size if it exists, but bypass if urgent
                 if can_plan and self.segment_queue and not is_urgent:
                     q_size = self.segment_queue.qsize()
-                    if q_size >= 3:  # Allow a small buffer of 3 segments
-                        logger.info(f"Queue has {q_size} segments - skipping planning to avoid spam")
+                    if q_size >= 1 or self._rendering_in_progress:
+                        logger.info(
+                            f"Queue guard active: queued={q_size}, rendering_in_progress={self._rendering_in_progress} "
+                            f"(threshold: >=1 segment)"
+                        )
                         can_plan = False
-                
+
                 if can_plan:
                     if is_urgent:
                         logger.info("⚡ Planning because frontend requested segments")
                     self._urgent_segment_needed = False
-                    
+                    self._rendering_in_progress = True
+
                     # Get recent plays to find the current song (song_a for planning)
                     db = await get_db()
                     history = await db.get_recent_plays(self.session_id, limit=10)
@@ -214,12 +220,14 @@ class DJLoop:
                         if not selected_uuid:
                             logger.warning("Planning failed - no song selected, increasing cooldown")
                             planning_cooldown = min(120, planning_cooldown * 1.5)
-                            
+
                     except Exception as e:
                         logger.error(f"Planning graph execution error: {e}")
                         import traceback
                         logger.error(traceback.format_exc())
                         planning_cooldown = min(120, planning_cooldown * 1.5)
+                    finally:
+                        self._rendering_in_progress = False
                 
                 else:
                     # Not time to plan yet
