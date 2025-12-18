@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Audio processing constants
 TARGET_LUFS = -14.0  # Global streaming standard
 SAMPLE_RATE = 44100
-TTS_DUCK_VOLUME = 0.8  # Even louder music during DJ talk
+TTS_DUCK_VOLUME = 0.45  # Music level during DJ talk (matches tests)
 
 
 def get_loudness(file_path: str) -> float:
@@ -104,7 +104,7 @@ def create_dj_mix(
     xfade_dur: float = 10.0,
     tts_offset: float = 5.0,
     tts_path: Optional[str] = None
-) -> Optional[str]:
+) -> Optional[Dict[str, Any]]:
     """
     Create a TRANSITION SEGMENT between two songs with optional TTS.
     
@@ -129,7 +129,7 @@ def create_dj_mix(
         tts_path: Path to TTS audio file (optional)
         
     Returns:
-        Path to the rendered output file, or None on error
+        Dict with output_path, metadata, and metadata_path on success, or None on error
     """
     # Generate output path if not provided
     if output_path is None:
@@ -150,7 +150,15 @@ def create_dj_mix(
     # Calculate transition start if not provided
     crossfade_duration = xfade_dur
     tts_offset_before_transition = tts_offset
-    transition_start = t_start if t_start is not None else (song1_duration - crossfade_duration - 20)
+
+    transition_buffer = 20.0
+    song_to_song_overlap = 0.75  # seconds of intentional overlap between segments
+    song1_lead_in = 12.0  # Lead-in inside this segment before the transition
+
+    transition_start = (
+        t_start if t_start is not None
+        else song1_duration - transition_buffer - crossfade_duration
+    )
     
     # Ensure transition_start is valid
     if transition_start < 20:
@@ -176,12 +184,6 @@ def create_dj_mix(
     #
     # Total segment: ~5 + crossfade + 45 ≈ 60 seconds
     
-    # How much of song A to include BEFORE transition
-    # Keep this minimal to avoid repeating what was already played in intro/previous segment
-    # The previous segment already played song A up to ~(duration-30), so we only need
-    # a brief lead-in for the crossfade to sound natural
-    song1_lead_in = 20.0  # 20 seconds lead-in to match transition_buffer in graph.py
-    
     # Start position in song A
     song1_start = max(0, transition_start - song1_lead_in)
     
@@ -199,22 +201,25 @@ def create_dj_mix(
     # Segment N+1 starts at: transition_start (next) - lead_in
     # So we need to trim song B so it ends at that point
     
-    # Rough estimate of next transition start relative to song B start:
-    song2_next_transition_start = song2_duration - 20
-    
-    # Calculate trim point:
-    # We want to keep audio until: next_transition_start - lead_in
-    # This ensures next segment picks up exactly there
-    song2_trim = song2_next_transition_start - song1_lead_in
-    
+    # Next transition anchor in Song B (start of the next crossfade)
+    song2_next_transition_start = song2_duration - transition_buffer
+    song2_handoff_start = max(0.0, song2_next_transition_start - song1_lead_in)
+
+    # Keep a known overlap with the next segment to avoid gaps
+    song2_trim = min(song2_handoff_start + song_to_song_overlap, song2_duration)
+
     if song2_trim < 60:
         song2_trim = song2_duration  # Use full song if very short
     
     logger.info(f"--- [TRANSITION SEGMENT] Mode: {transition_type} ---")
     logger.info(f"Song A: {song1_segment_duration:.1f}s included (from {song1_start:.1f}s, transition at {transition_start:.1f}s)")
-    logger.info(f"Song B: {song2_trim:.1f}s included (of {song2_duration:.1f}s total)")
-    expected_duration = segment_transition_pos + crossfade_duration + song2_trim
-    logger.info(f"Expected segment duration: ~{expected_duration:.1f}s ({expected_duration/60:.1f} min)")
+    logger.info(
+        "Song B: %.1fs included (of %.1fs total) — handoff @ %.1fs with %.2fs overlap",
+        song2_trim,
+        song2_duration,
+        song2_handoff_start,
+        song_to_song_overlap,
+    )
     
     # Input song A from the start position
     audio1_in = ffmpeg.input(song1_path, ss=song1_start).audio
@@ -233,15 +238,38 @@ def create_dj_mix(
     # NO fade-out at end - next segment will handle the transition from this song
 
     # Apply transition
-    # Song B needs to be delayed to start at segment_transition_pos
-    delay_ms = int(segment_transition_pos * 1000)
-    logger.info(f"Transition timing: segment_pos={segment_transition_pos}s, crossfade={crossfade_duration}s, song2_delay={delay_ms}ms")
+    # Song B needs to be delayed to start at segment_transition_pos, with a small head start
+    delay_seconds = max(segment_transition_pos - (song_to_song_overlap / 2), 0)
+    delay_ms = int(delay_seconds * 1000)
+    logger.info(
+        "Transition timing: segment_pos=%.2fs, crossfade=%.2fs, song2_delay=%dms (overlap padding %.2fs)",
+        segment_transition_pos,
+        crossfade_duration,
+        delay_ms,
+        song_to_song_overlap,
+    )
+
+    handoff_gap = song2_handoff_start - song2_trim
+    if handoff_gap > 0:
+        logger.warning(
+            "Song B coverage ends %.2fs before the next segment's start (%.2fs). This would create a gap.",
+            handoff_gap,
+            song2_handoff_start,
+        )
     
     # TTS timing (relative to segment start)
     actual_tts_start = segment_transition_pos - tts_offset_before_transition
     if actual_tts_start < 0:
         actual_tts_start = 0
     
+    expected_duration = max(song1_segment_duration, delay_seconds + song2_trim)
+    logger.info(
+        "Expected segment duration: ~%.1fs (%.1f min) covering Song B to %.2fs",
+        expected_duration,
+        expected_duration / 60,
+        song2_trim,
+    )
+
     if transition_type == 'blend' or transition_type == 'crossfade':
         a2_delayed = a2.filter('adelay', f"{delay_ms}|{delay_ms}")
         mixed_music = transitions.apply_crossfade(a1, a2_delayed, crossfade_duration)
@@ -262,14 +290,44 @@ def create_dj_mix(
         a2_delayed = a2.filter('adelay', f"{delay_ms}|{delay_ms}")
         mixed_music = transitions.apply_crossfade(a1, a2_delayed, crossfade_duration)
 
+    segment_metadata: Dict[str, Any] = {
+        "song1": {
+            "start": song1_start,
+            "end": song1_start + song1_segment_duration,
+            "transition_start": transition_start,
+            "segment_transition_pos": segment_transition_pos,
+        },
+        "song2": {
+            "start": 0.0,
+            "end": song2_trim,
+            "handoff_start": song2_handoff_start,
+            "overlap_with_next": song_to_song_overlap,
+        },
+        "transition": {
+            "type": transition_type,
+            "crossfade_duration": crossfade_duration,
+            "delay_ms": delay_ms,
+            "start_in_segment": delay_seconds,
+        },
+        "render": {
+            "expected_duration": expected_duration,
+        }
+    }
+
     # Handle TTS with ducking
     if tts_path and os.path.exists(tts_path):
         tts_in = ffmpeg.input(tts_path).audio
         tts = normalize_stream(tts_in.filter('aresample', SAMPLE_RATE), tts_lufs, target_lufs=TARGET_LUFS)
-        
+
         actual_tts_end = actual_tts_start + tts_duration
         delay_ms_tts = int(actual_tts_start * 1000)
         tts_delayed = tts.filter('adelay', f"{delay_ms_tts}|{delay_ms_tts}")
+
+        segment_metadata["tts"] = {
+            "start": actual_tts_start,
+            "end": actual_tts_end,
+            "delay_ms": delay_ms_tts,
+        }
 
         # Manual ducking for music
         ducked_music = mixed_music.filter(
@@ -295,11 +353,32 @@ def create_dj_mix(
             .overwrite_output()
             .run(capture_stdout=True, capture_stderr=True)
         )
-        
+
         # Log actual output duration
         output_duration = get_duration(output_path)
+        render_shortfall = expected_duration - output_duration
+        if render_shortfall > 0.25:
+            logger.warning(
+                "Rendered segment is shorter than expected by %.2fs (expected %.2fs, actual %.2fs)",
+                render_shortfall,
+                expected_duration,
+                output_duration,
+            )
+
+        segment_metadata["render"]["actual_duration"] = output_duration
+        segment_metadata["render"]["handoff_gap"] = max(handoff_gap, 0)
+
+        metadata_path = f"{output_path}.json"
+        with open(metadata_path, "w", encoding="utf-8") as meta_file:
+            json.dump(segment_metadata, meta_file, indent=2)
+
         logger.info(f"Success! Segment saved: {output_path} ({output_duration:.1f}s)")
-        return output_path
+        logger.info(f"Segment metadata saved: {metadata_path}")
+        return {
+            "output_path": output_path,
+            "metadata_path": metadata_path,
+            "metadata": segment_metadata,
+        }
     except ffmpeg.Error as e:
         logger.error("Error occurred in FFmpeg:")
         logger.error(e.stderr.decode() if e.stderr else str(e))
