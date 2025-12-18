@@ -1,0 +1,244 @@
+---
+alwaysApply: true
+---
+# AI DJ Monorepo - Cursor Rules
+
+## Project Context
+You are working in a monorepo for an AI DJ project. This file defines the standards, workflows, and constraints for all development work.
+
+## Core Principles
+
+### 0. No Confirmation / No Waiting
+- Do NOT ask “Should I proceed?” or wait for permission.
+- If the task prompt is clear enough, proceed immediately.
+- If something is ambiguous, make the smallest reasonable assumption, document it in `/docs/<phase>-notes.md`, and continue.
+- Only ask a question if:
+  1) you must choose between two mutually exclusive options that will block progress, AND
+  2) the choice cannot be safely defaulted.
+- Never tell the user to check background terminal logs. Instead, re-run commands as needed and summarize results in `/docs/<phase>-notes.md`.
+
+
+### 1. Documentation-Driven Development
+- **ALWAYS** read `/DOCUMENTATION.md` before starting any task
+- Treat `/DOCUMENTATION.md` as the source of truth and contract
+- If documentation conflicts with code, documentation wins
+- Update documentation when requirements change
+
+### 2. Scope Discipline
+- Work ONLY in folder(s) explicitly assigned in the current task prompt
+- **Exceptions allowed:**
+  - Creating/updating `/docs/<your_doc>.md` for your phase
+  - Modifying root-level config files when explicitly mentioned in task
+- Do NOT touch other folders/packages without explicit permission
+- Respect monorepo boundaries
+
+### 3. Code Quality Standards
+
+#### Typing & Documentation
+- All functions MUST have TypeScript/Python type annotations
+- Add docstrings to all functions (Google style preferred)
+- Export clear interfaces/types for cross-package communication
+- Document complex logic with inline comments
+
+#### Testing
+- Add minimal tests where practical (at least smoke tests)
+- Focus on contract/interface testing over implementation details
+- Test files should mirror source structure
+
+#### Git Hygiene
+- Prefer small, reviewable commits (single responsibility)
+- Write descriptive commit messages (conventional commits format)
+- Commit messages format: `type(scope): description`
+  - Types: feat, fix, docs, refactor, test, chore
+  - Example: `feat(audio-engine): add BPM detection`
+
+### 4. Research & Documentation Requirements
+
+For each phase/task, you MUST:
+
+1. **Research**: Look up and follow official documentation for:
+   - Frameworks/libraries being used
+   - APIs being integrated
+   - Architectural patterns being implemented
+
+2. **Document Decisions**: Cite key technical decisions in `/docs/<phase>-notes.md`
+
+3. **Create Phase Documentation** at `/docs/<phase>-notes.md` containing:
+
+```markdown
+# <Phase Name> - Implementation Notes
+
+## What Was Implemented
+- File list with brief descriptions
+- Key components/modules created
+- Interfaces/contracts established
+
+## How to Run Locally
+- Setup commands
+- Environment variables needed
+- Test commands
+- Development server commands
+
+## Interfaces & Contracts
+- Type definitions
+- API endpoints (REST/WebSocket)
+- Event schemas
+- Data models
+
+## Architecture Decisions
+- Key technical choices made
+- Official docs consulted (with links)
+- Rationale for major decisions
+
+## TODOs & Known Limitations
+- Incomplete features
+- Known bugs
+- Performance considerations
+- Future improvements needed
+
+## Dependencies Added
+- New packages and why
+- Version constraints
+```
+
+### 5. Security & Configuration
+
+#### Secrets Management
+- **NEVER** hardcode secrets, API keys, or credentials
+- Use `.env` files for local development
+- Maintain `.env.example` with dummy values
+- Load config through proper config loader (e.g., `dotenv`, `pydantic-settings`)
+- Document all required environment variables
+
+#### Environment Variables Template
+```bash
+# .env.example format
+# Service Configuration
+SERVICE_NAME=ai-dj-<service>
+PORT=3000
+
+# External APIs
+OPENAI_API_KEY=sk-your-key-here
+SPOTIFY_CLIENT_ID=your-client-id
+
+# Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/dbname
+```
+
+### 6. API Documentation
+
+#### REST APIs
+- Use OpenAPI/Swagger for REST endpoints
+- Generate docs automatically where possible
+- Keep schema definitions in sync with code
+
+#### WebSocket APIs
+- **IMPORTANT**: FastAPI does NOT include WebSocket routes in OpenAPI docs
+- Manually document all WebSocket endpoints in `/docs/websocket-api.md`:
+
+```markdown
+## WebSocket: /ws/audio-stream
+
+**Purpose**: Real-time audio data streaming
+
+**Connection**: 
+- URL: `ws://localhost:8000/ws/audio-stream`
+- Protocol: WebSocket
+
+**Message Format (Client → Server)**:
+\`\`\`json
+{
+  "type": "audio_chunk",
+  "data": "base64_encoded_audio",
+  "timestamp": 1234567890
+}
+\`\`\`
+
+**Message Format (Server → Client)**:
+\`\`\`json
+{
+  "type": "bpm_detected",
+  "bpm": 128,
+  "confidence": 0.95
+}
+\`\`\`
+```
+
+### 7. Monorepo Structure Conventions
+
+```
+/
+├── packages/
+│   ├── audio-engine/       # Audio processing
+│   ├── api-gateway/        # Main API
+│   ├── ml-models/          # AI/ML components
+│   └── shared/             # Shared utilities
+├── docs/
+│   ├── DOCUMENTATION.md    # Master contract
+│   ├── phase-1-notes.md
+│   ├── phase-2-notes.md
+│   └── websocket-api.md
+├── .env.example
+├── .cursorrules            # This file
+└── README.md
+```
+
+### 8. Language-Specific Guidelines
+
+#### TypeScript/Node.js
+- Use strict TypeScript config
+- Prefer `async/await` over callbacks
+- Use ESLint + Prettier
+- Export types from `index.ts` files
+
+#### Python
+- Use type hints (PEP 484)
+- Follow PEP 8 style guide
+- Use `black` for formatting
+- Prefer `asyncio` for async operations
+
+### 9. Workflow Checklist
+
+Before starting ANY task:
+- [ ] Read `/DOCUMENTATION.md`
+- [ ] Identify assigned folder(s)
+- [ ] Review existing phase notes in `/docs/`
+- [ ] Check `.env.example` for required config
+
+During implementation:
+- [ ] Add types/annotations
+- [ ] Write docstrings
+- [ ] Add minimal tests
+- [ ] Make small commits
+- [ ] Update `.env.example` if new vars added
+
+After completing task:
+- [ ] Create `/docs/<phase>-notes.md`
+- [ ] Document all WebSocket endpoints (if any)
+- [ ] Verify no secrets in code
+- [ ] Test locally following your own docs
+- [ ] Update root README.md if needed
+
+### 10. Common Pitfalls to Avoid
+
+❌ **DON'T**:
+- Modify files outside your assigned scope
+- Hardcode API keys or secrets
+- Skip documentation of WebSocket APIs
+- Make giant commits with mixed concerns
+- Leave TODOs undocumented
+- Add dependencies without documenting why
+
+✅ **DO**:
+- Consult official docs before implementing
+- Write self-documenting code with clear names
+- Consider the consumer of your interfaces
+- Leave the codebase better than you found it
+- Ask questions when contracts are unclear
+
+---
+
+## Meta
+- **alwaysApply**: true
+- **Last Updated**: 2024-12
+- **Version**: 1.0.0

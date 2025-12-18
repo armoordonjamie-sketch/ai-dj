@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.app {
+  @apply p-4;
+}
+
+.now-playing, .dj-says, .up-next {
+  @apply mb-4 p-4 border rounded shadow;
+}
+
+.controls {
+  @apply flex space-x-2;
+}
